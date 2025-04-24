@@ -82,6 +82,7 @@ export class SNSDemoStack extends cdk.Stack {
       timeout: Duration.seconds(10),
       memorySize: 128,
     });
+    
 
     // 允许删除 Lambda 操作桶
     imagesBucket.grantDelete(deleteInvalidFn);
@@ -93,6 +94,42 @@ export class SNSDemoStack extends cdk.Stack {
         maxBatchingWindow: Duration.seconds(5),
       })
     );
+
+    // 摄影师功能 2：元数据更新
+    // 创建 SNS Topic：用于发送元数据消息（如 Caption、Date、Name）
+    const metadataTopic = new sns.Topic(this, "MetadataTopic", {
+      displayName: "Image Metadata Topic",
+    });
+
+    // 创建 Lambda 函数：消费元数据 SNS 消息，并更新 DynamoDB 中对应项
+    const addMetadataFn = new lambdanode.NodejsFunction(this, "addMetadataFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      entry: `${__dirname}/../lambdas/addMetadata.ts`, // 函数路径
+      environment: {
+        TABLE_NAME: imageTable.tableName, // 将 DynamoDB 表名传入函数
+      },
+    });
+
+    // 授权 Lambda 更新 DynamoDB 表
+    imageTable.grantWriteData(addMetadataFn);
+
+    // SNS → Lambda 订阅（过滤策略只允许三种元数据类型）
+    metadataTopic.addSubscription(
+      new subs.LambdaSubscription(addMetadataFn, {
+        filterPolicy: {
+          metadata_type: sns.SubscriptionFilter.stringFilter({
+            allowlist: ["Caption", "Date", "Name"],
+          }),
+        },
+      })
+    );
+
+    // 输出元数据 SNS 主题的 ARN（用于 CLI 发布消息）
+    new cdk.CfnOutput(this, "metadataTopicArn", {
+      value: metadataTopic.topicArn,
+    });
 
 
     const demoTopic = new sns.Topic(this, "DemoTopic", {
