@@ -7,17 +7,16 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as iam from "aws-cdk-lib/aws-iam";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
-export class SNSDemoStack extends cdk.Stack {
+export class EDAAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-
-    //摄影师功能 1：上传图像处理
-    
+    // 摄影师功能 1：上传图像处理
     // 创建 S3 Bucket：用于摄影师上传图片（仅限 jpeg/png）
     const imagesBucket = new s3.Bucket(this, "images-bucket", {
       removalPolicy: RemovalPolicy.DESTROY,
@@ -82,7 +81,6 @@ export class SNSDemoStack extends cdk.Stack {
       timeout: Duration.seconds(10),
       memorySize: 128,
     });
-    
 
     // 允许删除 Lambda 操作桶
     imagesBucket.grantDelete(deleteInvalidFn);
@@ -106,22 +104,26 @@ export class SNSDemoStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       memorySize: 128,
       timeout: Duration.seconds(5),
-      entry: `${__dirname}/../lambdas/addMetadata.ts`, // 函数路径
+      entry: `${__dirname}/../lambdas/addMetadata.ts`,
       environment: {
-        TABLE_NAME: imageTable.tableName, // 将 DynamoDB 表名传入函数
+        TABLE_NAME: imageTable.tableName,
       },
     });
 
     // 授权 Lambda 更新 DynamoDB 表
     imageTable.grantWriteData(addMetadataFn);
 
-    // SNS → Lambda 订阅（过滤策略只允许三种元数据类型）
+    // SNS → Lambda 订阅（过滤策略只允许三种元数据类型，外加只能是摄影师用户类型）
     metadataTopic.addSubscription(
       new subs.LambdaSubscription(addMetadataFn, {
         filterPolicy: {
           metadata_type: sns.SubscriptionFilter.stringFilter({
             allowlist: ["Caption", "Date", "Name"],
           }),
+          // 可选加强：
+        user_type: sns.SubscriptionFilter.stringFilter({
+          allowlist: ["Photographer"],
+        }),
         },
       })
     );
@@ -131,11 +133,16 @@ export class SNSDemoStack extends cdk.Stack {
       value: metadataTopic.topicArn,
     });
 
-      // 审核员功能：状态更新 + 邮件通知
+    // 审核员功能：状态更新 + 邮件通知
 
     // 创建 SNS Topic：用于审核员提交审核状态
     const statusTopic = new sns.Topic(this, "StatusTopic", {
       displayName: "Review Status Topic",
+    });
+
+    // 通知摄影师的 Topic
+    const notifyTopic = new sns.Topic(this, "NotifyTopic", {
+      displayName: "Notify Photographer Topic",
     });
 
     // 创建 Lambda 函数：审核员更新状态 → 写入 DynamoDB
@@ -146,13 +153,14 @@ export class SNSDemoStack extends cdk.Stack {
       entry: `${__dirname}/../lambdas/updateStatus.ts`,
       environment: {
         TABLE_NAME: imageTable.tableName,
-        STATUS_NOTIFY_TOPIC_ARN: statusTopic.topicArn, // 发布状态变更消息
+        STATUS_NOTIFY_TOPIC_ARN: notifyTopic.topicArn,
       },
     });
 
     // 授权：允许更新 DynamoDB 表、发布 SNS 通知
     imageTable.grantWriteData(updateStatusFn);
     statusTopic.grantPublish(updateStatusFn);
+    notifyTopic.grantPublish(updateStatusFn);
 
     // 审核员 SNS 消息订阅：触发 updateStatusFn（无属性过滤）
     statusTopic.addSubscription(new subs.LambdaSubscription(updateStatusFn));
@@ -164,9 +172,8 @@ export class SNSDemoStack extends cdk.Stack {
       timeout: Duration.seconds(5),
       entry: `${__dirname}/../lambdas/notifyPhotographer.ts`,
       environment: {
-        FROM_EMAIL: "your-ses-sender@example.com", // ✅ 替换为已验证发件人
-        TO_EMAIL: "photographer@example.com",      // ✅ 替换为摄影师收件人
-        AWS_REGION: this.region,
+        FROM_EMAIL: "20108798@mail.wit.ie",
+        TO_EMAIL: "20108798@mail.wit.ie",
       },
     });
 
@@ -179,104 +186,11 @@ export class SNSDemoStack extends cdk.Stack {
     );
 
     // 当 updateStatusFn 发布通知 → 触发邮件 Lambda
-    statusTopic.addSubscription(new subs.LambdaSubscription(notifyPhotographerFn));
+    notifyTopic.addSubscription(new subs.LambdaSubscription(notifyPhotographerFn));
 
-    // 输出 Topic ARN（供 CLI 使用）
+    // 输出 Topic ARN、Bucket 名称、表名（供 CLI 使用）
     new cdk.CfnOutput(this, "statusTopicArn", {
       value: statusTopic.topicArn,
-    });
-
-
-
-    const demoTopic = new sns.Topic(this, "DemoTopic", {
-      displayName: "Demo topic",
-    });
-
-    const queue = new sqs.Queue(this, "all-msg-queue", {
-      receiveMessageWaitTime: cdk.Duration.seconds(5),
-    });
-
-    const failuresQueue = new sqs.Queue(this, "img-created-queue", {
-      receiveMessageWaitTime: cdk.Duration.seconds(5),
-    });
-
-    const processSNSMessageFn = new lambdanode.NodejsFunction(
-      this,
-      "processSNSMsgFn",
-      {
-        runtime: lambda.Runtime.NODEJS_22_X,
-        memorySize: 128,
-        timeout: cdk.Duration.seconds(3),
-        entry: `${__dirname}/../lambdas/processSNSMsg.ts`,
-      }
-    );
-
-    const processSQSMessageFn = new lambdanode.NodejsFunction(
-      this,
-      "processSQSMsgFn",
-      {
-        runtime: lambda.Runtime.NODEJS_22_X,
-        memorySize: 128,
-        timeout: cdk.Duration.seconds(3),
-        entry: `${__dirname}/../lambdas/processSQSMsg.ts`,
-      }
-    );
-
-    const processFailuresFn = new lambdanode.NodejsFunction(
-      this,
-      "processFailedMsgFn",
-      {
-        runtime: lambda.Runtime.NODEJS_22_X,
-        memorySize: 128,
-        timeout: cdk.Duration.seconds(3),
-        entry: `${__dirname}/../lambdas/processFailures.ts`,
-      }
-    );
-
-    demoTopic.addSubscription(
-      new subs.LambdaSubscription(processSNSMessageFn, {
-        filterPolicy: {
-          user_type: sns.SubscriptionFilter.stringFilter({
-            allowlist: ["Student", "Lecturer"],
-          }),
-        },
-      })
-    );
-
-    demoTopic.addSubscription(
-      new subs.SqsSubscription(queue, {
-        rawMessageDelivery: true,
-        filterPolicy: {
-          user_type: sns.SubscriptionFilter.stringFilter({
-            denylist: ["Lecturer"],
-          }),
-          source: sns.SubscriptionFilter.stringFilter({
-            matchPrefixes: ["Moodle", "Slack"],
-          }),
-        },
-      })
-    );
-
-    processSQSMessageFn.addEventSource(
-      new SqsEventSource(queue, {
-        maxBatchingWindow: Duration.seconds(5),
-        maxConcurrency: 2,
-      })
-    );
-
-    processFailuresFn.addEventSource(
-      new SqsEventSource(failuresQueue, {
-        maxBatchingWindow: Duration.seconds(5),
-        maxConcurrency: 2,
-      })
-    );
-
-
-    // 输出信息
-
-
-    new cdk.CfnOutput(this, "topicARN", {
-      value: demoTopic.topicArn,
     });
 
     new cdk.CfnOutput(this, "bucketName", {

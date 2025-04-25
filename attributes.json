@@ -1,0 +1,10 @@
+{
+  "metadata_type": {
+    "DataType": "String",
+    "StringValue": "Caption"
+  },
+  "user_type": {
+    "DataType": "String",
+    "StringValue": "Photographer"
+  }
+}

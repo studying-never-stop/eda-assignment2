@@ -46,11 +46,15 @@ export const handler: SNSHandler = async (event) => {
     console.log(`image [${id}] status update to ${status}`);
 
     // 发布变更通知消息，用于触发通知摄影师
-    await sns.send(
-      new PublishCommand({
+    await sns.send(new PublishCommand({
         TopicArn: notifyTopicArn,
-        Message: JSON.stringify({ id, status, reason }),
-      })
-    );
+        Message: JSON.stringify({
+          id,
+          status: update.status,
+          reason: update.reason,
+        }),
+      }));
+  
+      console.log(`Status change published for ${id}`);
   }
 };

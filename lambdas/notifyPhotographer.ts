@@ -4,13 +4,14 @@ import {
   SendEmailCommand,
   SendEmailCommandInput,
 } from "@aws-sdk/client-ses";
+import { SES_EMAIL_FROM, SES_EMAIL_TO, SES_REGION } from "../env"; 
 
 // 创建 SES 客户端
-const ses = new SESClient({ region: process.env.AWS_REGION });
+const ses = new SESClient({ region: SES_REGION });
 
 // 从环境变量中读取发件人和收件人邮箱
-const FROM = process.env.FROM_EMAIL!;
-const TO = process.env.TO_EMAIL!;
+const FROM = SES_EMAIL_FROM;
+const TO = SES_EMAIL_TO;
 
 export const handler: SNSHandler = async (event) => {
   console.log("Received status update:", JSON.stringify(event));
