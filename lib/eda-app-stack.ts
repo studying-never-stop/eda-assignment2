@@ -131,6 +131,62 @@ export class SNSDemoStack extends cdk.Stack {
       value: metadataTopic.topicArn,
     });
 
+      // 审核员功能：状态更新 + 邮件通知
+
+    // 创建 SNS Topic：用于审核员提交审核状态
+    const statusTopic = new sns.Topic(this, "StatusTopic", {
+      displayName: "Review Status Topic",
+    });
+
+    // 创建 Lambda 函数：审核员更新状态 → 写入 DynamoDB
+    const updateStatusFn = new lambdanode.NodejsFunction(this, "updateStatusFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      entry: `${__dirname}/../lambdas/updateStatus.ts`,
+      environment: {
+        TABLE_NAME: imageTable.tableName,
+        STATUS_NOTIFY_TOPIC_ARN: statusTopic.topicArn, // 发布状态变更消息
+      },
+    });
+
+    // 授权：允许更新 DynamoDB 表、发布 SNS 通知
+    imageTable.grantWriteData(updateStatusFn);
+    statusTopic.grantPublish(updateStatusFn);
+
+    // 审核员 SNS 消息订阅：触发 updateStatusFn（无属性过滤）
+    statusTopic.addSubscription(new subs.LambdaSubscription(updateStatusFn));
+
+    // 创建 Lambda 函数：状态变更 → 发邮件通知摄影师
+    const notifyPhotographerFn = new lambdanode.NodejsFunction(this, "notifyPhotographerFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      entry: `${__dirname}/../lambdas/notifyPhotographer.ts`,
+      environment: {
+        FROM_EMAIL: "your-ses-sender@example.com", // ✅ 替换为已验证发件人
+        TO_EMAIL: "photographer@example.com",      // ✅ 替换为摄影师收件人
+        AWS_REGION: this.region,
+      },
+    });
+
+    // 授权 Lambda 使用 SES 发邮件
+    notifyPhotographerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ses:SendEmail", "ses:SendRawEmail"],
+        resources: ["*"],
+      })
+    );
+
+    // 当 updateStatusFn 发布通知 → 触发邮件 Lambda
+    statusTopic.addSubscription(new subs.LambdaSubscription(notifyPhotographerFn));
+
+    // 输出 Topic ARN（供 CLI 使用）
+    new cdk.CfnOutput(this, "statusTopicArn", {
+      value: statusTopic.topicArn,
+    });
+
+
 
     const demoTopic = new sns.Topic(this, "DemoTopic", {
       displayName: "Demo topic",
