@@ -1,7 +1,7 @@
 {
   "metadata_type": {
     "DataType": "String",
-    "StringValue": "Caption"
+    "StringValue": "Date"
   },
   "user_type": {
     "DataType": "String",
