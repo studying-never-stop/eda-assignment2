@@ -172,8 +172,8 @@ export class EDAAppStack extends cdk.Stack {
       timeout: Duration.seconds(5),
       entry: `${__dirname}/../lambdas/notifyPhotographer.ts`,
       environment: {
-        FROM_EMAIL: "20108798@mail.wit.ie",
-        TO_EMAIL: "20108798@mail.wit.ie",
+        FROM_EMAIL: "SES_EMAIL_FROM",
+        TO_EMAIL: "SES_EMAIL_TO",
       },
     });
 
